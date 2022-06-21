@@ -117,7 +117,6 @@ type (
 	dummyAgent struct{}
 
 	agent struct {
-		ctx                        context.Context
 		cfg                        Network
 		chainID                    uint32
 		topicSuffix                string
@@ -229,7 +228,6 @@ func (p *agent) Start(ctx context.Context) error {
 		return errors.Wrap(err, "error when instantiating Agent host")
 	}
 
-	p.ctx = ctx
 	if err := host.AddBroadcastPubSub(ctx, _broadcastTopic+p.topicSuffix, func(ctx context.Context, data []byte) (err error) {
 		// Blocking handling the broadcast message until the agent is started
 		<-ready
@@ -337,11 +335,13 @@ func (p *agent) Start(ctx context.Context) error {
 	if err := host.AddBootstrap(p.bootNodeAddr); err != nil {
 		return err
 	}
+	host.JoinOverlay()
 
 	// connect to bootstrap nodes
 	p.host = host
-	if err := p.joinP2P(ctx); err != nil {
-		log.L().Error("fail to join p2p network", zap.Error(err))
+	if err := p.joinP2P(context.Background()); err != nil {
+		// fatal error for debug
+		log.L().Fatal("fail to join p2p network", zap.Error(err))
 		return err
 	}
 	close(ready)
@@ -406,7 +406,7 @@ func (p *agent) BroadcastOutbound(ctx context.Context, msg proto.Message) (err e
 		return
 	}
 	t := time.Now()
-	if err = host.Broadcast(p.ctx, _broadcastTopic+p.topicSuffix, data); err != nil {
+	if err = host.Broadcast(ctx, _broadcastTopic+p.topicSuffix, data); err != nil {
 		err = errors.Wrap(err, "error when sending broadcast message")
 		p.qosMetrics.updateSendBroadcast(t, false)
 		return
@@ -415,7 +415,7 @@ func (p *agent) BroadcastOutbound(ctx context.Context, msg proto.Message) (err e
 	return
 }
 
-func (p *agent) UnicastOutbound(_ context.Context, peer peer.AddrInfo, msg proto.Message) (err error) {
+func (p *agent) UnicastOutbound(ctx context.Context, peer peer.AddrInfo, msg proto.Message) (err error) {
 	host := p.host
 	if host == nil {
 		return ErrAgentNotStarted
@@ -451,7 +451,7 @@ func (p *agent) UnicastOutbound(_ context.Context, peer peer.AddrInfo, msg proto
 	}
 
 	t := time.Now()
-	if err = host.Unicast(p.ctx, peer, _unicastTopic+p.topicSuffix, data); err != nil {
+	if err = host.Unicast(ctx, peer, _unicastTopic+p.topicSuffix, data); err != nil {
 		err = errors.Wrap(err, "error when sending unicast message")
 		p.qosMetrics.updateSendUnicast(peerName, t, false)
 		return
@@ -520,16 +520,8 @@ func (p *agent) joinP2P(ctx context.Context) error {
 	if err := p.connectBootNode(ctx); err != nil {
 		return err
 	}
-	var (
-		interval = 200 * time.Microsecond
-		retry    = 10
-	)
-	// it takes times to establish handshake with bootstrap
-	if err := exponentialRetry(
-		func() error { return p.host.JoinOverlay(ctx) },
-		interval,
-		retry,
-	); err != nil {
+	// it might take a few seconds to establish handshake with bootstrap
+	if err := p.host.Advertise(); err != nil {
 		return err
 	}
 	p.host.FindPeers(ctx)
@@ -538,13 +530,12 @@ func (p *agent) joinP2P(ctx context.Context) error {
 
 // connect connects to bootstrap nodes
 func (p *agent) connectBootNode(ctx context.Context) error {
-	var tryNum, errNum, connNum, desiredConnNum int
+	var errNum, connNum, desiredConnNum int
 	conn := make(chan struct{}, len(p.cfg.BootstrapNodes))
 	connErrChan := make(chan error, len(p.cfg.BootstrapNodes))
 
 	// try to connect to all bootstrap node beside itself.
 	for i := range p.bootNodeAddr {
-		tryNum++
 		bootAddr := p.bootNodeAddr[i]
 		go func() {
 			if err := exponentialRetry(
@@ -568,7 +559,7 @@ func (p *agent) connectBootNode(ctx context.Context) error {
 		case err := <-connErrChan:
 			log.L().Info("Connection failed.", zap.Error(err))
 			errNum++
-			if errNum == tryNum {
+			if errNum == len(p.bootNodeAddr) {
 				return errors.New("failed to connect to any bootstrap node")
 			}
 		case <-conn:

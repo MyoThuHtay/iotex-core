@@ -15,7 +15,7 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware v1.2.0
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0
 	github.com/iotexproject/go-fsm v1.0.0
-	github.com/iotexproject/go-p2p v0.3.4-0.20220524062742-1598aa7e07ad
+	github.com/iotexproject/go-p2p v0.3.4-0.20220621225533-12ec78badc8a
 	github.com/iotexproject/go-pkgs v0.1.12
 	github.com/iotexproject/iotex-address v0.2.8
 	github.com/iotexproject/iotex-antenna-go/v2 v2.5.1
